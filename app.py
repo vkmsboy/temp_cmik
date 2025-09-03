@@ -85,7 +85,6 @@ def chapter_reader(manga_slug, chapter_num):
 def get_telegram_image(file_id):
     if not TELEGRAM_TOKEN: abort(500)
     try:
-        # --- FIX: Removed incorrect markdown formatting from URLs ---
         api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
         response = requests.get(api_url)
         response.raise_for_status()
@@ -287,14 +286,16 @@ def run_bot(token, admin_id, channel_id):
     CHANNEL_ID = channel_id
 
     async def main():
-        bot = telegram.Bot(token=TELEGRAM_TOKEN)
+        # --- THIS IS THE DEFINITIVE FIX ---
+        # 1. Build the application first.
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+        # 2. Use the application's bot to fetch history.
         logger.info("Loading data from channel...")
         try:
-            # --- FIX: Changed from `async for` to `await` and then a standard `for` loop ---
-            messages = await bot.get_chat_history(chat_id=CHANNEL_ID, limit=500)
+            messages = await application.bot.get_chat_history(chat_id=CHANNEL_ID, limit=500)
             for message in messages:
                 try:
-                    # Make sure the message has text before trying to load it
                     if message.text:
                         data = json.loads(message.text)
                         if 'slug' in data:
@@ -306,9 +307,8 @@ def run_bot(token, admin_id, channel_id):
             logger.error(f"Could not load data from channel. Is the bot an admin? Error: {e}")
 
         logger.info(f"Loaded {len(MANGA_DATA)} comics from channel.")
-
-        application = Application.builder().token(TELEGRAM_TOKEN).build()
         
+        # 3. Now, add all the handlers to the application.
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler("start", start)],
             states={
@@ -327,6 +327,7 @@ def run_bot(token, admin_id, channel_id):
         )
         application.add_handler(conv_handler)
         
+        # 4. Finally, start the application.
         try:
             logger.info("Bot initializing...")
             await application.initialize()
