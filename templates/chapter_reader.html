@@ -1,13 +1,11 @@
 {% extends "base.html" %}
-
-{% block title %}Reading {{ chapter.manga.title }} Ch. {{ chapter.chapter_number }}{% endblock %}
-
+{% block title %}Reading {{ chapter.manga_title }} Ch. {{ chapter.chapter_number }}{% endblock %}
 {% block content %}
 <div class="text-center mb-6">
-    <h1 class="text-4xl font-bold text-white">{{ chapter.manga.title }}</h1>
+    <h1 class="text-4xl font-bold text-white">{{ chapter.manga_title }}</h1>
     <h2 class="text-2xl text-gray-400">Chapter {{ chapter.chapter_number }}</h2>
     <div class="mt-4">
-        <a href="{{ url_for('manga_detail', manga_id=chapter.manga.id) }}" class="text-blue-400 hover:underline">&larr; Back to Chapter List</a>
+        <a href="{{ url_for('manga_detail', manga_slug=chapter.manga_slug) }}" class="text-blue-400 hover:underline">&larr; Back to Chapter List</a>
     </div>
 </div>
 
@@ -35,10 +33,10 @@
 
 <!-- Long Strip View Container -->
 <div id="long-strip-view" class="flex flex-col items-center">
-    {% for page in chapter.pages %}
+    {% for page_file_id in chapter.pages %}
     <div class="w-full max-w-4xl bg-gray-800 mb-1">
-        <img src="{{ url_for('get_telegram_image', file_id=page.file_id) }}" 
-             alt="Page {{ page.page_number }}" 
+        <img src="{{ url_for('get_telegram_image', file_id=page_file_id) }}" 
+             alt="Page" 
              class="w-full h-auto"
              loading="lazy">
     </div>
@@ -46,22 +44,21 @@
 </div>
 
 <div class="text-center mt-8">
-    <a href="{{ url_for('manga_detail', manga_id=chapter.manga.id) }}" class="text-blue-400 hover:underline">&larr; Back to Chapter List</a>
+    <a href="{{ url_for('manga_detail', manga_slug=chapter.manga_slug) }}" class="text-blue-400 hover:underline">&larr; Back to Chapter List</a>
 </div>
 
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        const pages = {{ chapter.pages | tojson }};
-        const pageURLs = pages.map(p => `{{ url_for('index') }}image/${p.file_id}`);
+        const pageFileIDs = {{ chapter.pages | tojson }};
+        const pageURLs = pageFileIDs.map(id => `{{ url_for('index') }}image/${id}`);
         
         let currentPageIndex = 0;
+        const totalPages = pageURLs.length;
 
         const longStripView = document.getElementById('long-strip-view');
         const pagedView = document.getElementById('paged-view');
-        
         const modeLongStripBtn = document.getElementById('mode-long-strip');
         const modePagedBtn = document.getElementById('mode-paged');
-        
         const pagedImage = document.getElementById('paged-image');
         const prevPageBtn = document.getElementById('prev-page');
         const nextPageBtn = document.getElementById('next-page');
@@ -69,13 +66,14 @@
         const topCounter = document.getElementById('page-counter');
 
         function updatePagedView() {
-            if (pages.length === 0) return;
+            if (totalPages === 0) return;
             pagedImage.src = pageURLs[currentPageIndex];
-            pagedCounter.textContent = `Page ${currentPageIndex + 1} of ${pages.length}`;
-            topCounter.textContent = `Page ${currentPageIndex + 1} of ${pages.length}`;
+            const pageNumText = `Page ${currentPageIndex + 1} of ${totalPages}`;
+            pagedCounter.textContent = pageNumText;
+            topCounter.textContent = pageNumText;
             
             prevPageBtn.disabled = currentPageIndex === 0;
-            nextPageBtn.disabled = currentPageIndex === pages.length - 1;
+            nextPageBtn.disabled = currentPageIndex === totalPages - 1;
             
             prevPageBtn.classList.toggle('opacity-50', prevPageBtn.disabled);
             nextPageBtn.classList.toggle('opacity-50', nextPageBtn.disabled);
@@ -88,10 +86,8 @@
             pagedView.classList.add('hidden');
             topCounter.textContent = '';
 
-            modeLongStripBtn.classList.replace('bg-gray-700', 'bg-blue-600');
-            modeLongStripBtn.classList.replace('text-gray-300', 'text-white');
-            modePagedBtn.classList.replace('bg-blue-600', 'bg-gray-700');
-            modePagedBtn.classList.replace('text-white', 'text-gray-300');
+            modeLongStripBtn.className = 'px-3 py-1 text-sm font-medium rounded-md bg-blue-600 text-white';
+            modePagedBtn.className = 'px-3 py-1 text-sm font-medium rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600';
         }
 
         function showPaged() {
@@ -99,37 +95,19 @@
             pagedView.classList.remove('hidden');
             updatePagedView();
 
-            modePagedBtn.classList.replace('bg-gray-700', 'bg-blue-600');
-            modePagedBtn.classList.replace('text-gray-300', 'text-white');
-            modeLongStripBtn.classList.replace('bg-blue-600', 'bg-gray-700');
-            modeLongStripBtn.classList.replace('text-white', 'text-gray-300');
+            modePagedBtn.className = 'px-3 py-1 text-sm font-medium rounded-md bg-blue-600 text-white';
+            modeLongStripBtn.className = 'px-3 py-1 text-sm font-medium rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600';
         }
 
         modeLongStripBtn.addEventListener('click', showLongStrip);
         modePagedBtn.addEventListener('click', showPaged);
+        prevPageBtn.addEventListener('click', () => { if (currentPageIndex > 0) { currentPageIndex--; updatePagedView(); } });
+        nextPageBtn.addEventListener('click', () => { if (currentPageIndex < totalPages - 1) { currentPageIndex++; updatePagedView(); } });
 
-        prevPageBtn.addEventListener('click', () => {
-            if (currentPageIndex > 0) {
-                currentPageIndex--;
-                updatePagedView();
-            }
-        });
-
-        nextPageBtn.addEventListener('click', () => {
-            if (currentPageIndex < pages.length - 1) {
-                currentPageIndex++;
-                updatePagedView();
-            }
-        });
-
-        // Keyboard navigation for paged view
         document.addEventListener('keydown', (e) => {
-            if (pagedView.classList.contains('hidden')) return; // Only if paged view is active
-            if (e.key === 'ArrowLeft') {
-                prevPageBtn.click();
-            } else if (e.key === 'ArrowRight') {
-                nextPageBtn.click();
-            }
+            if (pagedView.classList.contains('hidden')) return;
+            if (e.key === 'ArrowLeft') prevPageBtn.click();
+            else if (e.key === 'ArrowRight') nextPageBtn.click();
         });
 
         // Initialize default view
