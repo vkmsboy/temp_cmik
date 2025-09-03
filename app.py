@@ -35,8 +35,8 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # --- IN-MEMORY DATA CACHE ---
-MANGA_DATA = {} # The entire database, loaded from one JSON file.
-MASTER_MESSAGE_ID = None # The message ID of our single JSON file.
+MANGA_DATA = {} # The entire database, loaded from the pinned message.
+MASTER_MESSAGE_ID = None # The message ID of our single pinned JSON file.
 DATA_LOCK = threading.Lock()
 
 # --- FLASK WEB APPLICATION ---
@@ -103,12 +103,13 @@ def slugify(text):
     return re.sub(r'[\W_]+', '-', text.lower()).strip('-')
 
 async def save_data_to_channel(context: ContextTypes.DEFAULT_TYPE):
-    """Saves the entire MANGA_DATA object to the single master JSON message."""
+    """Saves the entire MANGA_DATA object to the single pinned master JSON message."""
     global MASTER_MESSAGE_ID
     with DATA_LOCK:
         if not MANGA_DATA:
             if MASTER_MESSAGE_ID:
                 try:
+                    await context.bot.unpin_chat_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID)
                     await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID)
                     MASTER_MESSAGE_ID = None
                 except telegram.error.TelegramError:
@@ -116,19 +117,21 @@ async def save_data_to_channel(context: ContextTypes.DEFAULT_TYPE):
             return
 
         pretty_json = json.dumps(MANGA_DATA, indent=2)
-        if len(pretty_json) > 3800:
-            await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"⚠️ **Warning:** Your database file is approaching the Telegram message size limit ({len(pretty_json)}/4096).", parse_mode=ParseMode.MARKDOWN)
+        if len(pretty_json) > 4000:
+            await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"⚠️ **Warning:** Database file size is critically large ({len(pretty_json)}/4096).", parse_mode=ParseMode.MARKDOWN)
 
         try:
             if MASTER_MESSAGE_ID:
-                message = await context.bot.edit_message_text(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
+                await context.bot.edit_message_text(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
             else:
                 message = await context.bot.send_message(chat_id=CHANNEL_ID, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
-            MASTER_MESSAGE_ID = message.message_id
+                MASTER_MESSAGE_ID = message.message_id
+                await context.bot.pin_chat_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID, disable_notification=True)
         except telegram.error.TelegramError as e:
-            logger.error(f"Failed to edit master message, creating a new one. Error: {e}")
+            logger.error(f"Failed to save to channel. Recreating message. Error: {e}")
             message = await context.bot.send_message(chat_id=CHANNEL_ID, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
             MASTER_MESSAGE_ID = message.message_id
+            await context.bot.pin_chat_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID, disable_notification=True)
 
 @admin_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -274,34 +277,25 @@ def run_bot(token, admin_id, channel_id):
     TELEGRAM_TOKEN, ADMIN_USER_ID, CHANNEL_ID = token, admin_id, channel_id
 
     async def main():
-        # --- THIS IS THE DEFINITIVE FIX ---
-        # 1. Create a temporary, lightweight bot object SOLELY for fetching history.
-        temp_bot = telegram.Bot(token=TELEGRAM_TOKEN)
-        
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+
         logger.info("Loading data from channel...")
         try:
-            messages = await temp_bot.get_chat_history(chat_id=CHANNEL_ID, limit=10)
-            for message in messages:
-                # Find the last message sent by our bot that contains JSON
-                if message.from_user.id == temp_bot.id and message.text:
-                    try:
-                        with DATA_LOCK:
-                            MANGA_DATA.update(json.loads(message.text))
-                        MASTER_MESSAGE_ID = message.message_id
-                        logger.info(f"Loaded data from master message ID: {MASTER_MESSAGE_ID}")
-                        break # Stop after finding the first valid message
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-            if not MASTER_MESSAGE_ID:
-                logger.info("No master message found. Starting with a fresh database.")
+            # Use get_chat to find the pinned message
+            chat = await application.bot.get_chat(chat_id=CHANNEL_ID)
+            if chat.pinned_message and chat.pinned_message.from_user.id == application.bot.id:
+                pinned_message = chat.pinned_message
+                try:
+                    with DATA_LOCK:
+                        MANGA_DATA.update(json.loads(pinned_message.text))
+                    MASTER_MESSAGE_ID = pinned_message.message_id
+                    logger.info(f"Loaded data from pinned message ID: {MASTER_MESSAGE_ID}")
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("Pinned message is not valid JSON. Starting fresh.")
+            else:
+                logger.info("No valid pinned message found. Starting with a fresh database.")
         except telegram.error.TelegramError as e:
             logger.error(f"Could not load data from channel. Is bot an admin? Error: {e}")
-        finally:
-            # 2. IMPORTANT: Clean up the temporary bot session.
-            await temp_bot.close()
-
-        # 3. Now, build the main application for handling user interactions.
-        application = Application.builder().token(TELEGRAM_TOKEN).build()
 
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler("start", start)],
