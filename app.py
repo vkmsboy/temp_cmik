@@ -262,7 +262,7 @@ async def add_chapter_zip_process(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text("✅ All chapters saved!")
     context.user_data.clear()
     logger.info("ZIP upload finished.")
-    await start(update, context)
+    await start(update, context) # Display main menu again
     return ConversationHandler.END
 
 async def delete_manga_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -286,14 +286,17 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("Conversation cancelled by user via /cancel command.")
     await update.message.reply_text("Operation cancelled.")
     context.user_data.clear()
-    # After cancelling, show the main menu again and end the conversation.
     await start(update, context)
     return ConversationHandler.END
 
-async def incorrect_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def unexpected_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles any input that is not expected in the current conversation state."""
-    logger.warning("Received an unexpected input for the current conversation state.")
-    await update.message.reply_text("I was not expecting that. Please provide the requested information, or type /cancel to go back to the main menu.")
+    if update.callback_query:
+        logger.warning(f"Caught an unhandled button press with data: {update.callback_query.data}")
+        await update.callback_query.answer("This button seems to be inactive or from an old menu. Please use /start to refresh.", show_alert=True)
+    elif update.message:
+        logger.warning(f"Received an unexpected message for the current conversation state: {update.message.text}")
+        await update.message.reply_text("I was not expecting that. Please provide the requested information, or type /cancel to go back to the main menu.")
 
 def run_bot(token, admin_id, channel_id):
     """The main entry point for the bot thread."""
@@ -331,7 +334,7 @@ def run_bot(token, admin_id, channel_id):
                 ADD_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_manga_desc)],
                 ADD_COVER: [
                     MessageHandler(filters.PHOTO, add_manga_cover),
-                    MessageHandler(~filters.PHOTO, incorrect_input) # Guide user if they send text
+                    MessageHandler(~filters.PHOTO, unexpected_input)
                 ],
                 SELECT_MANGA: [
                     CallbackQueryHandler(manage_action_menu, pattern=r"^manga_"),
@@ -348,7 +351,7 @@ def run_bot(token, admin_id, channel_id):
                 ],
                 ADD_CHAPTER_ZIP: [
                     MessageHandler(filters.Document.ZIP, add_chapter_zip_process),
-                    MessageHandler(~filters.Document.ZIP, incorrect_input) # Guide user if they send text
+                    MessageHandler(~filters.Document.ZIP, unexpected_input)
                 ],
                 DELETE_CONFIRM: [
                     CallbackQueryHandler(delete_manga_execute, pattern=r"^delmanga_yes_"),
@@ -357,7 +360,9 @@ def run_bot(token, admin_id, channel_id):
             },
             fallbacks=[
                 CommandHandler("start", start),
-                CommandHandler("cancel", cancel)
+                CommandHandler("cancel", cancel),
+                CallbackQueryHandler(unexpected_input), # Catch unexpected button presses
+                MessageHandler(filters.ALL, unexpected_input) # Catch unexpected messages
             ],
             name="main_conv", persistent=False
         )
