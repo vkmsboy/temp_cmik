@@ -345,7 +345,6 @@ def run_bot(token, admin_id, channel_id):
                 ADD_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_manga_title)],
                 ADD_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_manga_desc)],
                 ADD_COVER: [
-                    # --- THIS IS THE KEY CHANGE ---
                     MessageHandler(filters.PHOTO | filters.Document.IMAGE, add_manga_cover),
                     MessageHandler(~(filters.PHOTO | filters.Document.IMAGE), unexpected_input)
                 ],
@@ -380,7 +379,6 @@ def run_bot(token, admin_id, channel_id):
         )
         application.add_handler(conv_handler)
         
-        # A catch-all for messages that are not part of the conversation
         application.add_handler(MessageHandler(filters.COMMAND | filters.TEXT, unexpected_input))
         
         try:
