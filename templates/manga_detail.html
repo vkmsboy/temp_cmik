@@ -16,9 +16,9 @@
         <h2 class="text-3xl font-bold text-white mb-4 border-b-2 border-gray-700 pb-2">Chapters</h2>
         {% if chapters %}
         <div class="space-y-2">
-            {% for chapter in chapters %}
-            <a href="{{ url_for('chapter_reader', chapter_id=chapter.id) }}" class="block p-4 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors duration-200">
-                <span class="font-semibold text-lg text-white">Chapter {{ chapter.chapter_number }}</span>
+            {% for chapter_num, pages in chapters %}
+            <a href="{{ url_for('chapter_reader', manga_slug=manga_slug, chapter_num=chapter_num) }}" class="block p-4 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors duration-200">
+                <span class="font-semibold text-lg text-white">Chapter {{ chapter_num }}</span>
             </a>
             {% endfor %}
         </div>
