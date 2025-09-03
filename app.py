@@ -85,11 +85,12 @@ def chapter_reader(manga_slug, chapter_num):
 def get_telegram_image(file_id):
     if not TELEGRAM_TOKEN: abort(500)
     try:
-        api_url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_TOKEN}/getFile?file_id={file_id}"
+        # --- FIX: Removed incorrect markdown formatting from URLs ---
+        api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
         response = requests.get(api_url)
         response.raise_for_status()
         file_path = response.json()['result']['file_path']
-        image_url = f"[https://api.telegram.org/file/bot](https://api.telegram.org/file/bot){TELEGRAM_TOKEN}/{file_path}"
+        image_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
         return redirect(image_url)
     except Exception:
         abort(404)
@@ -289,12 +290,16 @@ def run_bot(token, admin_id, channel_id):
         bot = telegram.Bot(token=TELEGRAM_TOKEN)
         logger.info("Loading data from channel...")
         try:
-            async for message in bot.get_chat_history(chat_id=CHANNEL_ID, limit=500):
+            # --- FIX: Changed from `async for` to `await` and then a standard `for` loop ---
+            messages = await bot.get_chat_history(chat_id=CHANNEL_ID, limit=500)
+            for message in messages:
                 try:
-                    data = json.loads(message.text)
-                    if 'slug' in data:
-                        with DATA_LOCK:
-                            MANGA_DATA[data['slug']] = {"message_id": message.message_id, "data": data}
+                    # Make sure the message has text before trying to load it
+                    if message.text:
+                        data = json.loads(message.text)
+                        if 'slug' in data:
+                            with DATA_LOCK:
+                                MANGA_DATA[data['slug']] = {"message_id": message.message_id, "data": data}
                 except (json.JSONDecodeError, TypeError):
                     continue
         except telegram.error.TelegramError as e:
