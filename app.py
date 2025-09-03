@@ -80,7 +80,8 @@ def get_telegram_image(file_id):
         file_path = response.json()['result']['file_path']
         image_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
         return redirect(image_url)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to get image {file_id}: {e}")
         abort(404)
 
 # --- TELEGRAM BOT LOGIC ---
@@ -88,13 +89,15 @@ def get_telegram_image(file_id):
 (A_TITLE, A_DESC, A_COVER) = range(3) # Add Comic states
 (M_SELECT, M_ACTION, M_ADD_METHOD, M_ADD_ZIP, M_DEL_CONFIRM) = range(5) # Manage Comic states
 
-def admin_only(func):
+def admin_only_conv(func):
+    """Decorator to check for admin access within a conversation."""
     @wraps(func)
     async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user = update.effective_user
         if not user or user.id != ADMIN_USER_ID:
+            logger.warning(f"Unauthorized conversation access attempt by user {user.id if user else 'Unknown'}.")
             if update.callback_query: await update.callback_query.answer("⛔️ Unauthorized.", show_alert=True)
-            return
+            return ConversationHandler.END # End conversation if user is not admin
         return await func(update, context, *args, **kwargs)
     return wrapped
 
@@ -111,52 +114,74 @@ async def save_data_to_channel(context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.unpin_chat_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID)
                     await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID)
                     MASTER_MESSAGE_ID = None
-                except telegram.error.TelegramError: MASTER_MESSAGE_ID = None
+                    logger.info("Data is empty. Unpinned and deleted master message.")
+                except telegram.error.TelegramError as e:
+                    logger.warning(f"Failed to unpin/delete empty message, it might be gone already. Error: {e}")
+                    MASTER_MESSAGE_ID = None
             return
 
         pretty_json = json.dumps(MANGA_DATA, indent=2)
         if len(pretty_json) > 4000:
+            logger.warning(f"DB size is critically large ({len(pretty_json)}/4096).")
             await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"⚠️ **Warning:** DB size is critically large ({len(pretty_json)}/4096).", parse_mode=ParseMode.MARKDOWN)
 
         try:
             if MASTER_MESSAGE_ID:
                 await context.bot.edit_message_text(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
+                logger.info(f"Updated master message {MASTER_MESSAGE_ID}.")
             else:
                 message = await context.bot.send_message(chat_id=CHANNEL_ID, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
                 MASTER_MESSAGE_ID = message.message_id
                 await context.bot.pin_chat_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID, disable_notification=True)
+                logger.info(f"Created and pinned new master message {MASTER_MESSAGE_ID}.")
         except telegram.error.TelegramError as e:
             logger.error(f"Failed to save to channel. Recreating. Error: {e}")
             message = await context.bot.send_message(chat_id=CHANNEL_ID, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
             MASTER_MESSAGE_ID = message.message_id
             await context.bot.pin_chat_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID, disable_notification=True)
+            logger.info(f"Recreated and pinned new master message {MASTER_MESSAGE_ID}.")
 
 # --- Main Menu (Not a conversation) ---
-@admin_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays the main menu. Checks for admin inside."""
+    user = update.effective_user
+    if not user or user.id != ADMIN_USER_ID:
+        logger.warning(f"Unauthorized /start command attempt by user {user.id if user else 'Unknown'}.")
+        return
+
+    logger.info(f"User {user.id} executed /start command.")
     keyboard = [[InlineKeyboardButton("➕ Add New Comic", callback_data="add_manga")], [InlineKeyboardButton("📚 Manage Existing Comic", callback_data="manage_manga")]]
     text = "👋 Hello, Admin! Your Comic CMS is ready."
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        try:
+            await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        except telegram.error.BadRequest as e:
+            logger.warning(f"Failed to edit message for /start, likely unchanged: {e}")
+            await update.callback_query.answer()
     else:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 # --- Add Comic Conversation ---
+@admin_only_conv
 async def add_manga_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("Entering Add Comic conversation.")
     await update.callback_query.edit_message_text("Enter the title for the new comic:")
     return A_TITLE
 
 async def add_manga_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info(f"Add Comic: Received title '{update.message.text}'.")
     context.user_data['title'] = update.message.text
     await update.message.reply_text("Great. Now enter a short description:")
     return A_DESC
 
 async def add_manga_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("Add Comic: Received description.")
     context.user_data['description'] = update.message.text
     await update.message.reply_text("Perfect. Now send me the cover image.")
     return A_COVER
 
 async def add_manga_cover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("Add Comic: Received cover image.")
     title = context.user_data['title']
     manga_slug = slugify(title)
     with DATA_LOCK:
@@ -167,13 +192,17 @@ async def add_manga_cover(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await save_data_to_channel(context)
     await update.message.reply_text(f"✅ Success! `{title}` has been created.")
     context.user_data.clear()
-    await start(update, context)
+    logger.info("Add Comic: Conversation finished successfully.")
+    await start(update, context) # Show main menu again
     return ConversationHandler.END
 
 # --- Manage Comic Conversation ---
+@admin_only_conv
 async def manage_manga_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("Entering Manage Comic conversation.")
     with DATA_LOCK:
         if not MANGA_DATA:
+            logger.info("Manage Comic: No comics found.")
             await update.callback_query.answer("No comics found to manage.", show_alert=True)
             return ConversationHandler.END
         mangas = sorted(MANGA_DATA.values(), key=lambda x: x['title'])
@@ -189,6 +218,7 @@ async def manage_action_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data['manga_slug'] = manga_slug
     with DATA_LOCK:
         title = MANGA_DATA[manga_slug]['title']
+    logger.info(f"Manage Comic: Selected '{title}' ({manga_slug}). Displaying action menu.")
     keyboard = [
         [InlineKeyboardButton("➕ Add Chapter(s)", callback_data="add_chapter")],
         [InlineKeyboardButton("🗑️ Delete Comic", callback_data="delete_manga")],
@@ -198,11 +228,13 @@ async def manage_action_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return M_ACTION
 
 async def add_chapter_method(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("Manage Comic: Choosing chapter add method.")
     keyboard = [[InlineKeyboardButton("📦 ZIP Upload", callback_data="zip_upload")], [InlineKeyboardButton("⬅️ Back", callback_data=f"manga_{context.user_data['manga_slug']}")] ]
     await update.callback_query.edit_message_text("How to add chapters?", reply_markup=InlineKeyboardMarkup(keyboard))
     return M_ADD_METHOD
 
 async def add_chapter_zip_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("Manage Comic: Waiting for ZIP file.")
     await update.callback_query.edit_message_text("Please upload the `.zip` file now.")
     return M_ADD_ZIP
 
@@ -211,8 +243,10 @@ def extract_number(text):
     return numbers[-1] if numbers else None
 
 async def add_chapter_zip_process(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("Manage Comic: Received ZIP file, starting processing.")
     doc = await update.message.document.get_file()
     manga_slug = context.user_data['manga_slug']
+    
     with tempfile.TemporaryDirectory() as temp_dir:
         zip_path = Path(temp_dir) / "chapters.zip"
         await doc.download_to_drive(zip_path)
@@ -220,6 +254,7 @@ async def add_chapter_zip_process(update: Update, context: ContextTypes.DEFAULT_
 
         chapter_dirs = [d for d in Path(temp_dir).rglob('*') if d.is_dir() and any(f.suffix.lower() in ['.jpg', '.jpeg', '.png'] for f in d.iterdir())]
         if not chapter_dirs:
+            logger.warning("Manage Comic: ZIP file contained no image folders.")
             await update.message.reply_text("❌ No image folders found in ZIP."); await start(update, context); return ConversationHandler.END
 
         await update.message.reply_text(f"Found {len(chapter_dirs)} chapters. Uploading...")
@@ -238,29 +273,45 @@ async def add_chapter_zip_process(update: Update, context: ContextTypes.DEFAULT_
     await save_data_to_channel(context)
     await update.message.reply_text("✅ All chapters saved!")
     context.user_data.clear()
+    logger.info("Manage Comic: ZIP upload finished successfully.")
     await start(update, context)
     return ConversationHandler.END
 
 async def delete_manga_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     manga_slug = context.user_data['manga_slug']
+    logger.info(f"Manage Comic: Showing delete confirmation for '{manga_slug}'.")
     keyboard = [[InlineKeyboardButton("YES, DELETE IT", callback_data=f"delmanga_yes_{manga_slug}")], [InlineKeyboardButton("NO, GO BACK", callback_data=f"manga_{manga_slug}")] ]
     await update.callback_query.edit_message_text("⚠️ **Are you sure?** This is permanent.", parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
     return M_DEL_CONFIRM
 
 async def delete_manga_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     manga_slug = update.callback_query.data.split('_', 2)[2]
+    logger.info(f"Manage Comic: Deleting '{manga_slug}'.")
     with DATA_LOCK:
         MANGA_DATA.pop(manga_slug, None)
     await save_data_to_channel(context)
     await update.callback_query.edit_message_text(f"✅ Comic deleted.")
-    return await manage_manga_start(update, context) # Go back to comic list
+    return await manage_manga_start(update, context)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Generic cancel handler to end any conversation."""
-    await update.message.reply_text("Operation cancelled.")
+    logger.info("Conversation cancelled by user.")
+    if update.message:
+        await update.message.reply_text("Operation cancelled.")
     context.user_data.clear()
     await start(update, context)
     return ConversationHandler.END
+
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles any command that isn't recognized."""
+    logger.warning(f"Received unknown command: {update.message.text}")
+    await update.message.reply_text("Sorry, I didn't understand that command. Please use /start to see the menu.")
+
+async def unknown_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Catches any button press that doesn't have a handler."""
+    logger.warning(f"Caught an unhandled button press with data: {update.callback_query.data}")
+    await update.callback_query.answer("This button seems to be inactive or from an old menu. Please use /start to refresh.", show_alert=True)
+
 
 def run_bot(token, admin_id, channel_id):
     """The main entry point for the bot thread."""
@@ -287,7 +338,6 @@ def run_bot(token, admin_id, channel_id):
         except telegram.error.TelegramError as e:
             logger.error(f"Could not load data from channel. Is bot an admin? Error: {e}")
 
-        # --- New, Robust Handler Setup ---
         add_conv = ConversationHandler(
             entry_points=[CallbackQueryHandler(add_manga_start, pattern="^add_manga$")],
             states={
@@ -328,6 +378,8 @@ def run_bot(token, admin_id, channel_id):
         application.add_handler(CommandHandler("start", start))
         application.add_handler(add_conv)
         application.add_handler(manage_conv)
+        application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+        application.add_handler(CallbackQueryHandler(unknown_button))
         
         try:
             logger.info("Bot initializing...")
