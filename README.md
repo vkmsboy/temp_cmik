@@ -1,44 +1,37 @@
-# Python & Telegram Comic/Manga Website (v2)
+# Python & Telegram Comic Website (v3 - Channel Database Edition)
 
-This project contains a complete Python-based web application for a comic or manga website. It uses Flask for the web frontend and a Telegram Bot for all content management, including a powerful ZIP upload feature.
+This is a complete Python web application for a comic/manga website that uses a private Telegram channel as its database, offering a powerful, serverless, and free content management system.
 
 ## Features
 
--   **Full Management via Bot:** A new `/start` menu on the bot allows you to add, update, and delete comics and chapters.
--   **ZIP Upload for Chapters:** Upload a single `.zip` file containing multiple chapter folders (e.g., "Chapter 1", "Chapter 2") to add them to a comic in bulk. The bot automatically extracts the chapter numbers.
--   **Two-Step Comic Creation:** Add your comic's information (title, cover) first, then add chapters at any time.
--   **Dual Reading Modes:** On the website, readers can now switch between a "Long Strip" view (for webtoons/manhwa) and a "Paged" view (for traditional manga).
+- **Telegram Channel as a Database**: All comic data is stored as JSON messages in a private channel you control.
+- **Full Management via Bot**: A `/start` menu on the bot allows you to add, update, and delete comics and chapters.
+- **ZIP Upload for Chapters**: Bulk upload chapters in a single `.zip` file.
+- **Dual Reading Modes**: Readers can switch between "Long Strip" and "Paged" views on the website.
 
-## How to Use the Bot
+## ⚠️ Important Setup Instructions
 
-1.  **Start the Bot:** Open a chat with your bot on Telegram and send the `/start` command. This will bring up the main menu.
+### 1. Create Your "Database" Channel
 
-2.  **Add a New Comic:**
-    -   Choose "➕ Add New Comic".
-    -   The bot will ask for the title, description, and cover image. This creates the comic series on your site.
+1.  In Telegram, create a **New Private Channel**.
+2.  Go to the channel's info, select "Administrators," and **add your bot** as an admin. Ensure it has permissions to **Post, Edit, and Delete Messages**.
 
-3.  **Manage an Existing Comic:**
-    -   Choose "📚 Manage Existing Comic".
-    -   Select the comic you want to manage from the list.
-    -   You will get a new menu with these options:
-        -   **➕ Add Chapter(s):** This is where you upload new chapters. The bot will ask for your preferred upload method:
-            -   **ZIP Upload:** For bulk uploads. Your `.zip` file should be structured like this:
-                ```
-                MyAwesomeManga.zip
-                └── Chapters/
-                    ├── Chapter 1/
-                    │   ├── 01.jpg
-                    │   └── 02.png
-                    ├── Chapter 2.5/
-                    │   ├── page01.jpg
-                    │   └── page02.jpg
-                    └── ...
-                ```
-        -   **Manual Upload:** For adding a single chapter by sending images one by one.
-    -   **✏️ Update Info:** Change the comic's title, description, or cover image.
-    -   **🗑️ Delete Chapter:** Select and delete a specific chapter.
-    -   **❌ Delete Comic:** Permanently delete the entire comic series.
+### 2. Get Your Channel ID
 
-## Setup
+1.  Post a temporary message (e.g., "hello") in your new private channel.
+2.  **Forward** that message to `@userinfobot`.
+3.  The bot will reply with details. Copy the **Chat ID** (it will be a long negative number, like `-1001234567890`).
 
-The setup process is the same as before. If you are updating, simply replace the contents of your `app.py` and `templates/chapter_reader.html` with the new code provided. Ensure you have `python-dotenv`, `Flask`, `python-telegram-bot`, `SQLAlchemy`, and `requests` installed.
+### 3. Update Your `.env` / Colab Secrets
+
+You now need **three** secret variables:
+
+-   `TELEGRAM_TOKEN`: Your bot's token from BotFather.
+-   `ADMIN_USER_ID`: Your personal numeric Telegram ID.
+-   `CHANNEL_ID`: The negative channel ID you just copied.
+
+### 4. How to Use the Bot
+
+-   Send `/start` to your bot to open the main menu.
+-   **Add Comic**: Creates a new entry.
+-   **Manage Comic**: Allows you to add chapters (via ZIP or manually), update info, or delete comics/chapters.
