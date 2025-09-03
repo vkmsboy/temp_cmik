@@ -42,7 +42,6 @@ DATA_LOCK = threading.Lock()
 # --- FLASK WEB APPLICATION ---
 flask_app = Flask(__name__)
 
-# ... (Flask routes remain unchanged from the previous version) ...
 @flask_app.route("/")
 def index():
     with DATA_LOCK:
@@ -107,17 +106,16 @@ async def save_data_to_channel(context: ContextTypes.DEFAULT_TYPE):
     """Saves the entire MANGA_DATA object to the single master JSON message."""
     global MASTER_MESSAGE_ID
     with DATA_LOCK:
-        if not MANGA_DATA: # If data is empty, just delete the message
+        if not MANGA_DATA:
             if MASTER_MESSAGE_ID:
                 try:
                     await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID)
                     MASTER_MESSAGE_ID = None
                 except telegram.error.TelegramError:
-                    MASTER_MESSAGE_ID = None # Message was likely already deleted
+                    MASTER_MESSAGE_ID = None
             return
 
         pretty_json = json.dumps(MANGA_DATA, indent=2)
-        # Telegram message size limit is 4096 chars. Warn if we get close.
         if len(pretty_json) > 3800:
             await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"⚠️ **Warning:** Your database file is approaching the Telegram message size limit ({len(pretty_json)}/4096).", parse_mode=ParseMode.MARKDOWN)
 
@@ -276,25 +274,34 @@ def run_bot(token, admin_id, channel_id):
     TELEGRAM_TOKEN, ADMIN_USER_ID, CHANNEL_ID = token, admin_id, channel_id
 
     async def main():
-        application = Application.builder().token(TELEGRAM_TOKEN).build()
-
+        # --- THIS IS THE DEFINITIVE FIX ---
+        # 1. Create a temporary, lightweight bot object SOLELY for fetching history.
+        temp_bot = telegram.Bot(token=TELEGRAM_TOKEN)
+        
         logger.info("Loading data from channel...")
         try:
-            messages = await application.bot.get_chat_history(chat_id=CHANNEL_ID, limit=10)
+            messages = await temp_bot.get_chat_history(chat_id=CHANNEL_ID, limit=10)
             for message in messages:
-                if message.from_user.id == application.bot.id and message.text:
+                # Find the last message sent by our bot that contains JSON
+                if message.from_user.id == temp_bot.id and message.text:
                     try:
                         with DATA_LOCK:
                             MANGA_DATA.update(json.loads(message.text))
                         MASTER_MESSAGE_ID = message.message_id
                         logger.info(f"Loaded data from master message ID: {MASTER_MESSAGE_ID}")
-                        break
+                        break # Stop after finding the first valid message
                     except (json.JSONDecodeError, TypeError):
                         continue
             if not MASTER_MESSAGE_ID:
                 logger.info("No master message found. Starting with a fresh database.")
         except telegram.error.TelegramError as e:
             logger.error(f"Could not load data from channel. Is bot an admin? Error: {e}")
+        finally:
+            # 2. IMPORTANT: Clean up the temporary bot session.
+            await temp_bot.close()
+
+        # 3. Now, build the main application for handling user interactions.
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
 
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler("start", start)],
