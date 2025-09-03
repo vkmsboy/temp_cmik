@@ -2,6 +2,7 @@ import os
 import threading
 import logging
 import requests
+import asyncio # <-- ADDED THIS LINE TO IMPORT THE LIBRARY
 
 from flask import Flask, render_template, redirect, url_for, abort
 from dotenv import load_dotenv
@@ -297,8 +298,13 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 def run_bot():
+    """Run the bot."""
+    # --- ADDED THESE 2 LINES TO FIX THE THREADING ERROR ---
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     if not TELEGRAM_TOKEN:
-        logger.error("Telegram bot cannot start: TELEGRAM_TOKEN is not set in .env file.")
+        logger.error("Telegram bot cannot start: TELEGRAM_TOKEN is not set.")
         return
         
     application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -324,18 +330,18 @@ def run_bot():
     )
 
     application.add_handler(conv_handler)
-    logger.info("Telegram bot is starting...")
+    logger.info("Telegram bot is starting polling...")
     application.run_polling()
+
 
 if __name__ == "__main__":
     if not all([TELEGRAM_TOKEN, ADMIN_USER_ID]):
         print("="*60)
-        print("ERROR: STARTUP FAILED")
-        print("Please create a '.env' file with your TELEGRAM_TOKEN and ADMIN_USER_ID.")
-        print("You can get your token from @BotFather on Telegram.")
-        print("You can get your user ID from @userinfobot on Telegram.")
+        print("ERROR: This script is not intended to be run directly.")
+        print("Please run it via the Colab notebook which sets environment variables.")
         print("="*60)
     else:
+        # This part is now primarily for local testing, Colab starts the threads.
         bot_thread = threading.Thread(target=run_bot)
         bot_thread.daemon = True
         bot_thread.start()
