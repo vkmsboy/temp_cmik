@@ -281,9 +281,10 @@ def run_bot(token, admin_id, channel_id):
 
         logger.info("Loading data from channel...")
         try:
-            # Use get_chat to find the pinned message
             chat = await application.bot.get_chat(chat_id=CHANNEL_ID)
-            if chat.pinned_message and chat.pinned_message.from_user.id == application.bot.id:
+            # --- THIS IS THE DEFINITIVE FIX ---
+            # Add a check to ensure pinned_message.from_user is not None
+            if chat.pinned_message and chat.pinned_message.from_user and chat.pinned_message.from_user.id == application.bot.id:
                 pinned_message = chat.pinned_message
                 try:
                     with DATA_LOCK:
