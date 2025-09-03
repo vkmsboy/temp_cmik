@@ -3,6 +3,7 @@ import threading
 import logging
 import requests
 import asyncio
+from telegram.ext import Application
 
 from flask import Flask, render_template, redirect, url_for, abort
 from dotenv import load_dotenv
@@ -13,7 +14,6 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application,
     CommandHandler,
     MessageHandler,
     ContextTypes,
@@ -255,7 +255,11 @@ def run_bot():
         logger.error("Telegram bot cannot start: TELEGRAM_TOKEN is not set.")
         return
     
-    # --- CHANGE 1: REMOVED .shutdown_signals([]) FROM HERE ---
+    # --- THIS IS THE DEFINITIVE FIX ---
+    # We change the default setting on the Application class itself
+    # before any object is created. This is more robust.
+    Application._DEFAULT_SHUTDOWN_SIGNALS = ()
+    
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -275,8 +279,7 @@ def run_bot():
     application.add_handler(conv_handler)
     logger.info("Telegram bot is starting polling...")
     
-    # --- CHANGE 2: ADDED shutdown_signals=[] TO THE CORRECT PLACE ---
-    application.run_polling(shutdown_signals=[])
+    application.run_polling()
 
 
 if __name__ == "__main__":
