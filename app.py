@@ -27,7 +27,6 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # --- CONFIGURATION (Globals for Flask) ---
-# These will be set by the run_bot function when it starts
 TELEGRAM_TOKEN = None
 ADMIN_USER_ID = None
 CHANNEL_ID = None
@@ -86,11 +85,11 @@ def chapter_reader(manga_slug, chapter_num):
 def get_telegram_image(file_id):
     if not TELEGRAM_TOKEN: abort(500)
     try:
-        api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
+        api_url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_TOKEN}/getFile?file_id={file_id}"
         response = requests.get(api_url)
         response.raise_for_status()
         file_path = response.json()['result']['file_path']
-        image_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+        image_url = f"[https://api.telegram.org/file/bot](https://api.telegram.org/file/bot){TELEGRAM_TOKEN}/{file_path}"
         return redirect(image_url)
     except Exception:
         abort(404)
@@ -279,12 +278,8 @@ async def end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await start(update, context)
     return ConversationHandler.END
 
-# --- THIS IS THE MAIN CHANGE ---
-# The function now accepts the secrets as arguments
 def run_bot(token, admin_id, channel_id):
     """The main entry point for the bot thread."""
-    
-    # Set the global variables so all functions (including Flask routes) can use them
     global TELEGRAM_TOKEN, ADMIN_USER_ID, CHANNEL_ID
     TELEGRAM_TOKEN = token
     ADMIN_USER_ID = admin_id
@@ -361,6 +356,3 @@ if __name__ == "__main__":
         bot_thread.start()
         flask_app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
 
-```
-
----
