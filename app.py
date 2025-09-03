@@ -26,23 +26,18 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-# --- CONFIGURATION ---
-load_dotenv()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-try:
-    ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID"))
-    CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-except (ValueError, TypeError):
-    ADMIN_USER_ID, CHANNEL_ID = None, None
+# --- CONFIGURATION (Globals for Flask) ---
+# These will be set by the run_bot function when it starts
+TELEGRAM_TOKEN = None
+ADMIN_USER_ID = None
+CHANNEL_ID = None
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- IN-MEMORY DATA CACHE ---
-# This dictionary will hold all our comic data, loaded from the channel on startup.
-# Structure: { "comic_slug": {"message_id": 123, "data": {...comic_json...}} }
 MANGA_DATA = {}
-DATA_LOCK = threading.Lock() # To prevent race conditions when updating data
+DATA_LOCK = threading.Lock()
 
 # --- FLASK WEB APPLICATION ---
 flask_app = Flask(__name__)
@@ -50,7 +45,6 @@ flask_app = Flask(__name__)
 @flask_app.route("/")
 def index():
     with DATA_LOCK:
-        # Sort data by title for display
         mangas = sorted(MANGA_DATA.values(), key=lambda x: x['data']['title'])
     return render_template("index.html", mangas=mangas)
 
@@ -62,12 +56,8 @@ def manga_detail(manga_slug):
         abort(404)
     
     manga = manga_entry['data']
-    # Sort chapters by chapter number (as float)
     try:
-        chapters_sorted = sorted(
-            manga.get('chapters', {}).items(), 
-            key=lambda item: float(item[0])
-        )
+        chapters_sorted = sorted(manga.get('chapters', {}).items(), key=lambda item: float(item[0]))
     except (ValueError, TypeError):
         chapters_sorted = sorted(manga.get('chapters', {}).items())
         
@@ -106,7 +96,6 @@ def get_telegram_image(file_id):
         abort(404)
 
 # --- TELEGRAM BOT LOGIC ---
-# Conversation states
 (START_ROUTES, ADD_MANGA_TITLE, ADD_MANGA_DESC, ADD_MANGA_COVER,
  MANAGE_SELECT_MANGA, MANAGE_ACTION_MENU, ADD_CHAPTER_METHOD,
  ADD_CHAPTER_MANUAL_NUMBER, ADD_CHAPTER_MANUAL_PAGES, ADD_CHAPTER_ZIP,
@@ -129,18 +118,16 @@ def slugify(text):
     return re.sub(r'[\W_]+', '-', text.lower()).strip('-')
 
 async def save_manga_data(context: ContextTypes.DEFAULT_TYPE, manga_slug: str, manga_json: dict):
-    """Posts or edits a message in the channel and updates the in-memory cache."""
     with DATA_LOCK:
         entry = MANGA_DATA.get(manga_slug, {})
         message_id = entry.get('message_id')
         pretty_json = json.dumps(manga_json, indent=2)
         
-        if message_id: # Edit existing message
+        if message_id:
             message = await context.bot.edit_message_text(chat_id=CHANNEL_ID, message_id=message_id, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
-        else: # Post new message
+        else:
             message = await context.bot.send_message(chat_id=CHANNEL_ID, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
         
-        # Update cache
         MANGA_DATA[manga_slug] = {"message_id": message.message_id, "data": manga_json}
 
 async def delete_manga_data(context: ContextTypes.DEFAULT_TYPE, manga_slug: str):
@@ -149,13 +136,9 @@ async def delete_manga_data(context: ContextTypes.DEFAULT_TYPE, manga_slug: str)
         if entry and entry.get('message_id'):
             await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=entry['message_id'])
 
-# --- Bot Handlers ---
 @admin_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    keyboard = [
-        [InlineKeyboardButton("➕ Add New Comic", callback_data="add_manga")],
-        [InlineKeyboardButton("📚 Manage Existing Comic", callback_data="manage_manga")],
-    ]
+    keyboard = [[InlineKeyboardButton("➕ Add New Comic", callback_data="add_manga")], [InlineKeyboardButton("📚 Manage Existing Comic", callback_data="manage_manga")]]
     text = "👋 Hello, Admin! This is your Comic CMS Bot."
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -183,11 +166,8 @@ async def add_manga_cover(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     manga_slug = slugify(title)
     
     manga_json = {
-        "title": title,
-        "slug": manga_slug,
-        "description": context.user_data['description'],
-        "cover_file_id": update.message.photo[-1].file_id,
-        "chapters": {}
+        "title": title, "slug": manga_slug, "description": context.user_data['description'],
+        "cover_file_id": update.message.photo[-1].file_id, "chapters": {}
     }
     await save_manga_data(context, manga_slug, manga_json)
     await update.message.reply_text(f"✅ Success! `{title}` has been created.")
@@ -199,7 +179,7 @@ async def add_manga_cover(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def manage_manga_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with DATA_LOCK:
         if not MANGA_DATA:
-            await update.callback_query.edit_message_text("No comics found. Add one first!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="main_menu")]]))
+            await update.callback_query.edit_message_text("No comics found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="main_menu")]]))
             return START_ROUTES
         mangas = sorted(MANGA_DATA.values(), key=lambda x: x['data']['title'])
     
@@ -218,8 +198,7 @@ async def manage_action_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     keyboard = [
         [InlineKeyboardButton("➕ Add Chapter(s)", callback_data="add_chapter")],
-        [InlineKeyboardButton("🗑️ Delete Chapter", callback_data="delete_chapter")],
-        [InlineKeyboardButton("❌ Delete Comic", callback_data="delete_manga")],
+        [InlineKeyboardButton("🗑️ Delete Comic", callback_data="delete_manga")],
         [InlineKeyboardButton("⬅️ Back to Comic List", callback_data="back_to_manage")],
     ]
     await query.edit_message_text(f"Managing `{title}`:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
@@ -228,7 +207,6 @@ async def manage_action_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def add_chapter_method(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📦 ZIP Upload", callback_data="zip_upload")],
-        [InlineKeyboardButton("🖼️ Manual Upload", callback_data="manual_upload")],
         [InlineKeyboardButton("⬅️ Back", callback_data=f"manga_{context.user_data['manga_slug']}")]
     ]
     await update.callback_query.edit_message_text("How to add chapters?", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -269,10 +247,7 @@ async def add_chapter_zip_process(update: Update, context: ContextTypes.DEFAULT_
             if not image_files: continue
             
             await update.message.reply_text(f"Uploading Chapter {chapter_num} ({len(image_files)} pages)...")
-            page_file_ids = []
-            for img_path in image_files:
-                sent = await context.bot.send_photo(chat_id=update.effective_chat.id, photo=img_path.read_bytes())
-                page_file_ids.append(sent.photo[-1].file_id)
+            page_file_ids = [sent.photo[-1].file_id for img_path in image_files if (sent := await context.bot.send_photo(chat_id=update.effective_chat.id, photo=img_path.read_bytes()))]
             manga_json['chapters'][chapter_num] = page_file_ids
 
     await save_manga_data(context, manga_slug, manga_json)
@@ -297,30 +272,39 @@ async def delete_manga_execute(update: Update, context: ContextTypes.DEFAULT_TYP
     await manage_manga_start(update, context)
     return MANAGE_SELECT_MANGA
 
-# --- Fallback & Cancel ---
 async def end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Operation cancelled.")
+    if update.message:
+        await update.message.reply_text("Operation cancelled.")
     context.user_data.clear()
     await start(update, context)
     return ConversationHandler.END
 
+# --- THIS IS THE MAIN CHANGE ---
+# The function now accepts the secrets as arguments
+def run_bot(token, admin_id, channel_id):
+    """The main entry point for the bot thread."""
+    
+    # Set the global variables so all functions (including Flask routes) can use them
+    global TELEGRAM_TOKEN, ADMIN_USER_ID, CHANNEL_ID
+    TELEGRAM_TOKEN = token
+    ADMIN_USER_ID = admin_id
+    CHANNEL_ID = channel_id
 
-def run_bot():
     async def main():
-        if not all([TELEGRAM_TOKEN, ADMIN_USER_ID, CHANNEL_ID]):
-            logger.error("CRITICAL: Bot requires TELEGRAM_TOKEN, ADMIN_USER_ID, and CHANNEL_ID to run.")
-            return
-
         bot = telegram.Bot(token=TELEGRAM_TOKEN)
         logger.info("Loading data from channel...")
-        async for message in bot.get_chat_history(chat_id=CHANNEL_ID, limit=200):
-            try:
-                data = json.loads(message.text)
-                if 'slug' in data:
-                    with DATA_LOCK:
-                        MANGA_DATA[data['slug']] = {"message_id": message.message_id, "data": data}
-            except (json.JSONDecodeError, TypeError):
-                continue # Ignore non-json messages
+        try:
+            async for message in bot.get_chat_history(chat_id=CHANNEL_ID, limit=500):
+                try:
+                    data = json.loads(message.text)
+                    if 'slug' in data:
+                        with DATA_LOCK:
+                            MANGA_DATA[data['slug']] = {"message_id": message.message_id, "data": data}
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        except telegram.error.TelegramError as e:
+            logger.error(f"Could not load data from channel. Is the bot an admin? Error: {e}")
+
         logger.info(f"Loaded {len(MANGA_DATA)} comics from channel.")
 
         application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -328,31 +312,15 @@ def run_bot():
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler("start", start)],
             states={
-                START_ROUTES: [
-                    CallbackQueryHandler(add_manga_start, pattern="^add_manga$"),
-                    CallbackQueryHandler(manage_manga_start, pattern="^manage_manga$"),
-                ],
+                START_ROUTES: [CallbackQueryHandler(add_manga_start, pattern="^add_manga$"), CallbackQueryHandler(manage_manga_start, pattern="^manage_manga$")],
                 ADD_MANGA_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_manga_title)],
                 ADD_MANGA_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_manga_desc)],
                 ADD_MANGA_COVER: [MessageHandler(filters.PHOTO, add_manga_cover)],
-                MANAGE_SELECT_MANGA: [
-                    CallbackQueryHandler(manage_action_menu, pattern=r"^manga_"),
-                    CallbackQueryHandler(start, pattern="^main_menu$")
-                ],
-                MANAGE_ACTION_MENU: [
-                    CallbackQueryHandler(add_chapter_method, pattern="^add_chapter$"),
-                    CallbackQueryHandler(delete_manga_confirm, pattern="^delete_manga$"),
-                    CallbackQueryHandler(manage_manga_start, pattern="^back_to_manage$"),
-                ],
-                ADD_CHAPTER_METHOD: [
-                    CallbackQueryHandler(add_chapter_zip_start, pattern="^zip_upload$"),
-                    CallbackQueryHandler(manage_action_menu, pattern=r"^manga_"),
-                ],
+                MANAGE_SELECT_MANGA: [CallbackQueryHandler(manage_action_menu, pattern=r"^manga_"), CallbackQueryHandler(start, pattern="^main_menu$")],
+                MANAGE_ACTION_MENU: [CallbackQueryHandler(add_chapter_method, pattern="^add_chapter$"), CallbackQueryHandler(delete_manga_confirm, pattern="^delete_manga$"), CallbackQueryHandler(manage_manga_start, pattern="^back_to_manage$")],
+                ADD_CHAPTER_METHOD: [CallbackQueryHandler(add_chapter_zip_start, pattern="^zip_upload$"), CallbackQueryHandler(manage_action_menu, pattern=r"^manga_")],
                 ADD_CHAPTER_ZIP: [MessageHandler(filters.Document.ZIP, add_chapter_zip_process)],
-                DELETE_MANGA_CONFIRM: [
-                    CallbackQueryHandler(delete_manga_execute, pattern=r"^delmanga_yes_"),
-                    CallbackQueryHandler(manage_action_menu, pattern=r"^manga_"),
-                ],
+                DELETE_MANGA_CONFIRM: [CallbackQueryHandler(delete_manga_execute, pattern=r"^delmanga_yes_"), CallbackQueryHandler(manage_action_menu, pattern=r"^manga_")],
             },
             fallbacks=[CommandHandler("cancel", end_conversation)],
             persistent=False, name="comic_cms_conversation"
@@ -365,7 +333,7 @@ def run_bot():
             await application.updater.start_polling()
             await application.start()
             logger.info("Telegram bot is now running.")
-            await asyncio.Event().wait() # Keep it running indefinitely
+            await asyncio.Event().wait()
         finally:
             logger.info("Bot stopping...")
             if application.updater and application.updater.is_running: await application.updater.stop()
@@ -382,9 +350,17 @@ def run_bot():
         loop.close()
 
 if __name__ == "__main__":
-    if not all([TELEGRAM_TOKEN, ADMIN_USER_ID, CHANNEL_ID]):
-        print("ERROR: Set TELEGRAM_TOKEN, ADMIN_USER_ID, and CHANNEL_ID in .env or Colab secrets.")
+    load_dotenv()
+    local_token = os.getenv("TELEGRAM_TOKEN")
+    local_admin_id = int(os.getenv("ADMIN_USER_ID"))
+    local_channel_id = int(os.getenv("CHANNEL_ID"))
+    if not all([local_token, local_admin_id, local_channel_id]):
+        print("ERROR: For local run, set TELEGRAM_TOKEN, ADMIN_USER_ID, and CHANNEL_ID in .env file.")
     else:
-        bot_thread = threading.Thread(target=run_bot, daemon=True)
+        bot_thread = threading.Thread(target=run_bot, args=(local_token, local_admin_id, local_channel_id), daemon=True)
         bot_thread.start()
-        flask_app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+        flask_app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+
+```
+
+---
