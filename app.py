@@ -86,6 +86,11 @@ def get_telegram_image(file_id):
         abort(404)
 
 # --- TELEGRAM BOT LOGIC ---
+# --- DEFINITIVE FIX: Conversation states are defined in the global scope ---
+(A_TITLE, A_DESC, A_COVER) = range(3)
+(C_GET_ZIP,) = range(3, 4)
+(D_CONFIRM,) = range(4, 5)
+
 def admin_only(func):
     """Decorator for simple commands and conversation entry points."""
     @wraps(func)
@@ -229,7 +234,6 @@ async def add_chapter_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await update.message.reply_text(f"Couldn't find a comic named `{title_from_args}`.")
             return ConversationHandler.END
     
-    # This part is for button presses
     manga_slug = context.user_data.get('manga_slug')
     if manga_slug:
          await update.callback_query.edit_message_text("Please upload the ZIP file for this comic.")
@@ -337,11 +341,6 @@ def run_bot(token, admin_id, channel_id):
     global TELEGRAM_TOKEN, ADMIN_USER_ID, CHANNEL_ID, MASTER_MESSAGE_ID
     TELEGRAM_TOKEN, ADMIN_USER_ID, CHANNEL_ID = token, admin_id, channel_id
 
-    # --- DEFINITIVE FIX: Define conversation states inside the running scope ---
-    (A_TITLE, A_DESC, A_COVER) = range(3)
-    (C_GET_ZIP,) = range(3, 4)
-    (D_CONFIRM,) = range(4, 5)
-
     async def main():
         application = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -363,7 +362,7 @@ def run_bot(token, admin_id, channel_id):
         
         # --- New, Robust Handler Setup ---
         add_conv = ConversationHandler(
-            entry_points=[CommandHandler("addcomic", add_comic_start), CallbackQueryHandler(add_comic_start, pattern="^add_comic_start$")],
+            entry_points=[CommandHandler("addcomic", admin_only(add_comic_start)), CallbackQueryHandler(admin_only(add_comic_start), pattern="^add_comic_start$")],
             states={
                 A_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_comic_title)],
                 A_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_comic_desc)],
@@ -374,14 +373,14 @@ def run_bot(token, admin_id, channel_id):
         )
 
         add_chapter_conv = ConversationHandler(
-            entry_points=[CommandHandler("addchapter", add_chapter_start), CallbackQueryHandler(add_chapter_start, pattern="^add_chapter_btn$")],
+            entry_points=[CommandHandler("addchapter", admin_only(add_chapter_start)), CallbackQueryHandler(admin_only(add_chapter_start), pattern="^add_chapter_btn$")],
             states={ C_GET_ZIP: [MessageHandler(filters.Document.ZIP, add_chapter_zip_process)], },
             fallbacks=[CommandHandler("cancel", cancel)],
             name="add_chapter_conv", persistent=False
         )
         
         delete_conv = ConversationHandler(
-            entry_points=[CommandHandler("deletecomic", delete_comic_start), CallbackQueryHandler(delete_comic_start, pattern="^delete_manga_btn$")],
+            entry_points=[CommandHandler("deletecomic", admin_only(delete_comic_start)), CallbackQueryHandler(admin_only(delete_comic_start), pattern="^delete_manga_btn$")],
             states={ D_CONFIRM: [CallbackQueryHandler(delete_comic_execute, pattern="^delete_confirm_yes$"), CallbackQueryHandler(start, pattern="^delete_confirm_no$")] },
             fallbacks=[CommandHandler("cancel", cancel)],
             name="delete_conv", persistent=False
