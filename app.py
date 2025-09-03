@@ -3,7 +3,6 @@ import threading
 import logging
 import requests
 import asyncio
-from telegram.ext import Application
 
 from flask import Flask, render_template, redirect, url_for, abort
 from dotenv import load_dotenv
@@ -14,6 +13,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
+    Application,
     CommandHandler,
     MessageHandler,
     ContextTypes,
@@ -247,39 +247,66 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 def run_bot():
-    """Run the bot."""
+    """
+    Sets up the asyncio event loop and runs the bot's async main function.
+    This is the target for our background thread.
+    """
+    async def main():
+        """
+        The main async function for the bot. It initializes, adds handlers,
+        and starts the bot manually, bypassing the problematic run_polling().
+        """
+        if not TELEGRAM_TOKEN:
+            logger.error("Telegram bot cannot start: TELEGRAM_TOKEN is not set.")
+            return
+
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler("upload", start_upload)],
+            states={
+                CHOOSE_ACTION: [CallbackQueryHandler(ask_manga_title, pattern="^add_manga$"), CallbackQueryHandler(choose_manga_for_chapter, pattern="^add_chapter$")],
+                ASK_MANGA_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_manga_title)],
+                ASK_MANGA_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_manga_desc)],
+                ASK_MANGA_COVER: [MessageHandler(filters.PHOTO, save_manga_cover)],
+                CHOOSE_MANGA_FOR_CHAPTER: [CallbackQueryHandler(ask_chapter_number, pattern="^manga_")],
+                ASK_CHAPTER_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, start_page_upload)],
+                UPLOAD_PAGES: [MessageHandler(filters.PHOTO, collect_page), CommandHandler("done", save_chapter)],
+            },
+            fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel)],
+        )
+
+        application.add_handler(conv_handler)
+        
+        # This is the manual, robust startup sequence
+        try:
+            logger.info("Bot is initializing...")
+            await application.initialize()
+            logger.info("Bot is starting to poll for updates...")
+            await application.updater.start_polling()
+            logger.info("Bot is starting to process updates...")
+            await application.start()
+            logger.info("Telegram bot is now running.")
+            # Keep the coroutine alive indefinitely
+            while True:
+                await asyncio.sleep(3600)
+        finally:
+            # Ensure cleanup happens if the loop ever breaks
+            logger.info("Bot is stopping...")
+            await application.stop()
+            await application.updater.stop()
+            await application.shutdown()
+
+
+    # Set up the event loop for the new thread and run the async main function
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
-    if not TELEGRAM_TOKEN:
-        logger.error("Telegram bot cannot start: TELEGRAM_TOKEN is not set.")
-        return
-    
-    # --- THIS IS THE DEFINITIVE FIX ---
-    # We change the default setting on the Application class itself
-    # before any object is created. This is more robust.
-    Application._DEFAULT_SHUTDOWN_SIGNALS = ()
-    
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("upload", start_upload)],
-        states={
-            CHOOSE_ACTION: [CallbackQueryHandler(ask_manga_title, pattern="^add_manga$"), CallbackQueryHandler(choose_manga_for_chapter, pattern="^add_chapter$")],
-            ASK_MANGA_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_manga_title)],
-            ASK_MANGA_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_manga_desc)],
-            ASK_MANGA_COVER: [MessageHandler(filters.PHOTO, save_manga_cover)],
-            CHOOSE_MANGA_FOR_CHAPTER: [CallbackQueryHandler(ask_chapter_number, pattern="^manga_")],
-            ASK_CHAPTER_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, start_page_upload)],
-            UPLOAD_PAGES: [MessageHandler(filters.PHOTO, collect_page), CommandHandler("done", save_chapter)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel)],
-    )
-
-    application.add_handler(conv_handler)
-    logger.info("Telegram bot is starting polling...")
-    
-    application.run_polling()
+    try:
+        loop.run_until_complete(main())
+    except Exception as e:
+        logger.error(f"Critical error in bot thread, thread is stopping: {e}")
+    finally:
+        loop.close()
 
 
 if __name__ == "__main__":
