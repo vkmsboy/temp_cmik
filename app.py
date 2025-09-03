@@ -3,7 +3,6 @@ import threading
 import logging
 import requests
 import asyncio
-import signal # <-- Import signal library
 
 from flask import Flask, render_template, redirect, url_for, abort
 from dotenv import load_dotenv
@@ -256,10 +255,8 @@ def run_bot():
         logger.error("Telegram bot cannot start: TELEGRAM_TOKEN is not set.")
         return
     
-    ### THIS IS THE KEY CHANGE ###
-    # We tell the application not to handle OS signals (like Ctrl+C)
-    # because that can only be done in the main thread.
-    application = Application.builder().token(TELEGRAM_TOKEN).shutdown_signals([]).build()
+    # --- CHANGE 1: REMOVED .shutdown_signals([]) FROM HERE ---
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("upload", start_upload)],
@@ -277,7 +274,10 @@ def run_bot():
 
     application.add_handler(conv_handler)
     logger.info("Telegram bot is starting polling...")
-    application.run_polling()
+    
+    # --- CHANGE 2: ADDED shutdown_signals=[] TO THE CORRECT PLACE ---
+    application.run_polling(shutdown_signals=[])
+
 
 if __name__ == "__main__":
     # This part is now primarily for local testing, Colab starts the threads.
