@@ -86,6 +86,7 @@ def get_telegram_image(file_id):
         abort(404)
 
 # --- TELEGRAM BOT LOGIC ---
+# A single, unified set of states for the entire conversation
 (SELECTING_ACTION, ADD_TITLE, ADD_DESC, ADD_COVER,
  SELECT_MANGA, ACTION_MENU, ADD_CHAPTER_METHOD,
  ADD_CHAPTER_ZIP, DELETE_CONFIRM) = range(9)
@@ -115,22 +116,32 @@ async def save_data_to_channel(context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.unpin_chat_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID)
                     await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID)
                     MASTER_MESSAGE_ID = None
-                except telegram.error.TelegramError: MASTER_MESSAGE_ID = None
+                    logger.info("Data is empty. Unpinned and deleted master message.")
+                except telegram.error.TelegramError as e:
+                    logger.warning(f"Failed to unpin/delete empty message, it might be gone already. Error: {e}")
+                    MASTER_MESSAGE_ID = None
             return
 
         pretty_json = json.dumps(MANGA_DATA, indent=2)
+        if len(pretty_json) > 4000:
+            logger.warning(f"DB size is critically large ({len(pretty_json)}/4096).")
+            await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"⚠️ **Warning:** DB size is critically large ({len(pretty_json)}/4096).", parse_mode=ParseMode.MARKDOWN)
+
         try:
             if MASTER_MESSAGE_ID:
                 await context.bot.edit_message_text(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
+                logger.info(f"Updated master message {MASTER_MESSAGE_ID}.")
             else:
                 message = await context.bot.send_message(chat_id=CHANNEL_ID, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
                 MASTER_MESSAGE_ID = message.message_id
                 await context.bot.pin_chat_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID, disable_notification=True)
+                logger.info(f"Created and pinned new master message {MASTER_MESSAGE_ID}.")
         except telegram.error.TelegramError as e:
-            logger.error(f"Failed to save to channel, recreating message. Error: {e}")
+            logger.error(f"Failed to save to channel. Recreating. Error: {e}")
             message = await context.bot.send_message(chat_id=CHANNEL_ID, text=f"<code>{pretty_json}</code>", parse_mode=ParseMode.HTML)
             MASTER_MESSAGE_ID = message.message_id
             await context.bot.pin_chat_message(chat_id=CHANNEL_ID, message_id=MASTER_MESSAGE_ID, disable_notification=True)
+            logger.info(f"Recreated and pinned new master message {MASTER_MESSAGE_ID}.")
 
 # --- Conversation Handlers ---
 @admin_only
@@ -144,19 +155,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECTING_ACTION
-
-@admin_only
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Standalone help command, not part of a conversation."""
-    logger.info(f"User {update.effective_user.id} requested help.")
-    help_text = """
-    *Comic CMS Bot Help*
-    `/start` - Shows the main menu.
-    `/help` - Shows this message.
-    `/cancel` - Cancels any current operation (like adding a comic).
-    """
-    await update.message.reply_text(dedent(help_text), parse_mode=ParseMode.MARKDOWN)
-
 
 async def add_manga_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("State: SELECTING_ACTION -> ADD_TITLE")
@@ -231,6 +229,12 @@ async def add_chapter_method(update: Update, context: ContextTypes.DEFAULT_TYPE)
     logger.info("State: ACTION_MENU -> ADD_CHAPTER_METHOD")
     keyboard = [[InlineKeyboardButton("📦 ZIP Upload", callback_data="zip_upload")], [InlineKeyboardButton("⬅️ Back", callback_data=f"manga_{context.user_data['manga_slug']}")] ]
     await update.callback_query.edit_message_text("Please upload the ZIP file containing chapter folders:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return ADD_CHAPTER_METHOD
+
+# --- THIS IS THE NEWLY ADDED FUNCTION ---
+async def add_chapter_zip_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("State: ADD_CHAPTER_METHOD -> ADD_CHAPTER_ZIP")
+    await update.callback_query.edit_message_text("Please upload the `.zip` file now.")
     return ADD_CHAPTER_ZIP
 
 def extract_number(text):
@@ -332,9 +336,12 @@ def run_bot(token, admin_id, channel_id):
                     CallbackQueryHandler(add_manga_start, pattern="^add_manga$"),
                     CallbackQueryHandler(manage_manga_start, pattern="^manage_manga$"),
                 ],
-                ADD_TITLE: [MessageHandler(filters.TEXT, add_manga_title)],
-                ADD_DESC: [MessageHandler(filters.TEXT, add_manga_desc)],
-                ADD_COVER: [MessageHandler(filters.PHOTO | filters.Document.IMAGE, add_manga_cover)],
+                ADD_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_manga_title)],
+                ADD_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_manga_desc)],
+                ADD_COVER: [
+                    MessageHandler(filters.PHOTO | filters.Document.IMAGE, add_manga_cover),
+                    MessageHandler(~(filters.PHOTO | filters.Document.IMAGE), unexpected_input)
+                ],
                 SELECT_MANGA: [
                     CallbackQueryHandler(manage_action_menu, pattern=r"^manga_"),
                     CallbackQueryHandler(start, pattern="^main_menu$")
@@ -348,15 +355,18 @@ def run_bot(token, admin_id, channel_id):
                     CallbackQueryHandler(add_chapter_zip_start, pattern="^zip_upload$"),
                     CallbackQueryHandler(manage_action_menu, pattern=r"^manga_")
                 ],
-                ADD_CHAPTER_ZIP: [MessageHandler(filters.Document.ZIP, add_chapter_zip_process)],
+                ADD_CHAPTER_ZIP: [
+                    MessageHandler(filters.Document.ZIP, add_chapter_zip_process),
+                    MessageHandler(~filters.Document.ZIP, unexpected_input)
+                ],
                 DELETE_CONFIRM: [
                     CallbackQueryHandler(delete_manga_execute, pattern=r"^delmanga_yes_"),
                     CallbackQueryHandler(manage_action_menu, pattern=r"^manga_")
                 ],
             },
             fallbacks=[
-                CommandHandler("cancel", cancel),
-                CommandHandler("start", start), # Can restart from anywhere
+                CommandHandler("start", start),
+                CommandHandler("cancel", cancel)
             ],
             name="main_conv", persistent=False,
             per_message=False 
