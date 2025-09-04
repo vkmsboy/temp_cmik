@@ -156,6 +156,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECTING_ACTION
 
+# --- THIS IS THE RESTORED HELP COMMAND ---
+@admin_only
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Standalone help command, not part of a conversation."""
+    logger.info(f"User {update.effective_user.id} requested help.")
+    help_text = """
+    *Comic CMS Bot Help*
+    `/start` - Shows the main menu.
+    `/help` - Shows this message.
+    `/cancel` - Cancels any current operation (like adding a comic).
+    """
+    await update.message.reply_text(dedent(help_text), parse_mode=ParseMode.MARKDOWN)
+
 async def add_manga_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("State: SELECTING_ACTION -> ADD_TITLE")
     await update.callback_query.edit_message_text("Enter the title for the new comic:")
@@ -231,7 +244,6 @@ async def add_chapter_method(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.callback_query.edit_message_text("Please upload the ZIP file containing chapter folders:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ADD_CHAPTER_METHOD
 
-# --- THIS IS THE NEWLY ADDED FUNCTION ---
 async def add_chapter_zip_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("State: ADD_CHAPTER_METHOD -> ADD_CHAPTER_ZIP")
     await update.callback_query.edit_message_text("Please upload the `.zip` file now.")
