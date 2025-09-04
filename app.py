@@ -241,6 +241,12 @@ async def add_chapter_method(update: Update, context: ContextTypes.DEFAULT_TYPE)
     logger.info("State: ACTION_MENU -> ADD_CHAPTER_METHOD")
     keyboard = [[InlineKeyboardButton("📦 ZIP Upload", callback_data="zip_upload")], [InlineKeyboardButton("⬅️ Back", callback_data=f"manga_{context.user_data['manga_slug']}")] ]
     await update.callback_query.edit_message_text("Please upload the ZIP file containing chapter folders:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return ADD_CHAPTER_METHOD
+
+# --- THIS IS THE RESTORED FUNCTION ---
+async def add_chapter_zip_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("State: ADD_CHAPTER_METHOD -> ADD_CHAPTER_ZIP")
+    await update.callback_query.edit_message_text("Please upload the `.zip` file now.")
     return ADD_CHAPTER_ZIP
 
 def extract_number(text):
