@@ -254,14 +254,31 @@ async def manage_action_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text(f"Managing `{title}`:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     return ACTION_MENU
 
-async def delete_comic_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    manga_slug = context.user_data['manga_slug']
-    keyboard = [[InlineKeyboardButton("YES, DELETE IT", callback_data="delete_confirm_yes")], [InlineKeyboardButton("NO, CANCEL", callback_data=f"manga_{manga_slug}")]]
-    await update.callback_query.edit_message_text("⚠️ **Are you sure?** This is permanent.", parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+# --- THIS IS THE RESTORED/RENAMED FUNCTION ---
+async def delete_comic_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Asks for confirmation before deleting a comic."""
+    manga_slug = ""
+    if context.args: # From command
+        title = " ".join(context.args)
+        manga_slug = slugify(title)
+    elif update.callback_query: # From button
+        manga_slug = context.user_data.get('manga_slug')
+    
+    if not manga_slug or manga_slug not in MANGA_DATA:
+        await update.effective_message.reply_text("Could not find that comic. Please try again.")
+        return SELECTING_ACTION
+
+    context.user_data['manga_slug_to_delete'] = manga_slug
+    keyboard = [[InlineKeyboardButton("YES, DELETE IT", callback_data="delete_confirm_yes")], [InlineKeyboardButton("NO, CANCEL", callback_data="delete_confirm_no")]]
+    await update.effective_message.reply_text(f"⚠️ Are you sure you want to delete `{MANGA_DATA[manga_slug]['title']}`? This is permanent.", parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
     return DELETE_CONFIRM
 
 async def delete_comic_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    manga_slug = context.user_data['manga_slug']
+    manga_slug = context.user_data.pop('manga_slug_to_delete', None)
+    if not manga_slug:
+        await update.callback_query.edit_message_text("An error occurred. Please try again.")
+        return await start(update, context)
+
     with DATA_LOCK:
         MANGA_DATA.pop(manga_slug, None)
     await save_data_to_channel(context)
@@ -385,9 +402,10 @@ def run_bot(token, admin_id, channel_id):
                     CallbackQueryHandler(delete_comic_execute, pattern="^delete_confirm_yes$"),
                     CallbackQueryHandler(manage_action_menu, pattern=r"^manga_")
                 ],
+                ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, cancel)]
             },
             fallbacks=[CommandHandler("cancel", cancel)],
-            name="main_conv", persistent=False, per_message=False
+            name="main_conv", persistent=False, per_message=False, conversation_timeout=300.0
         )
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(conv_handler)
